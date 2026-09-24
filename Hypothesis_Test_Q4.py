@@ -6,13 +6,9 @@ import sys, io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 import pandas as pd
 from scipy.stats import mannwhitneyu
-import zipfile
 
-# خواندن دیتا از فایل زیپ
-zip_path = "data/final_data_with_parking_text.zip"
-with zipfile.ZipFile(zip_path, 'r') as z:
-    with z.open('final_data_with_parking_text.csv') as f:
-        df = pd.read_csv(f, low_memory=False)
+# خواندن دیتا از فایل CSV
+df = pd.read_csv("data/final_data_with_parking_text.csv", low_memory=False)
 
 # فقط تهران
 df = df[df["city_slug"] == "tehran"].copy()
