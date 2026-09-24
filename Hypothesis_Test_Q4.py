@@ -4,11 +4,11 @@
 # وارد کردن کتابخانه ها
 import sys, io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+import os
 import pandas as pd
 from scipy.stats import mannwhitneyu
-
-# خواندن دیتا از فایل CSV
-df = pd.read_csv("data/final_data_with_parking_text.csv", low_memory=False)
+#خواندن دیتا
+df = pd.read_csv("data/final_data_slim.csv", low_memory=False)
 
 # فقط تهران
 df = df[df["city_slug"] == "tehran"].copy()
