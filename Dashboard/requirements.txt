@@ -1,0 +1,11 @@
+streamlit
+pandas
+numpy
+plotly
+scikit-learn
+matplotlib
+pyarrow
+scipy
+arabic-reshaper
+python-bidi
+jdatetime
