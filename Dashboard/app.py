@@ -35,6 +35,6 @@ with c1:
     st.page_link("pages/2_EDA.py",              label="📈 EDA & Descriptive", icon="➡️")
 with c2:
     st.page_link("pages/3_Hypothesis_Tests.py", label="🧪 Hypothesis Tests",  icon="➡️")
-    st.page_link("pages/4_Classification.py",   label="🎯 Classification",    icon="➡️")
+    st.page_link("pages/4_Clustering.py",   label="🎯 Clustering",    icon="➡️")
 with c3:
     st.page_link("pages/5_Regression.py",       label="📉 Regression",        icon="➡️")

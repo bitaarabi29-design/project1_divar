@@ -9,3 +9,5 @@ scipy
 arabic-reshaper
 python-bidi
 jdatetime
+lightgbm
+catboost

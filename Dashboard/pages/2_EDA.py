@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")            # non-interactive backend for Streamlit
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 from matplotlib.ticker import FuncFormatter
 import plotly.express as px
 import seaborn as sns
@@ -15,14 +16,14 @@ from data_utils import load_data
 st.set_page_config(page_title="EDA", layout="wide")
 st.title("📈 EDA & Descriptive Statistics")
 
-# ---------- Persian text helper (from your scripts) ----------
+# ---------- Persian text helper ----------
 plt.rcParams['font.family'] = 'Tahoma'
 
 def fix_fa(text):
     reshaped_text = arabic_reshaper.reshape(str(text))
     return get_display(reshaped_text)
 
-# ---------- Load cleaned data (the output of Final_Preprocess.ipynb) ----------
+# ---------- Load cleaned data ----------
 df = load_data()
 df['created_at_month'] = pd.to_datetime(df['created_at_month'], errors='coerce')
 
@@ -52,10 +53,14 @@ tabs = st.tabs([f"Descriptive Statistics #{i}" for i in range(1, 10)])
 with tabs[0]:
     st.markdown("**Q1. توزیع آگهی‌های موجود در دسته‌های مختلف را برای دسته‌بندی سطح دو و سطح سه رسم کنید.**")
     st.plotly_chart(
-        px.histogram(f, x="cat2_slug", title="cat2_slug"),
+        px.histogram(
+            f, x="cat2_slug", title="cat2_slug",
+            category_orders={"cat2_slug": f["cat2_slug"].value_counts().index}),
         use_container_width=True)
     st.plotly_chart(
-        px.histogram(f, x="cat3_slug", title="cat3_slug"),
+        px.histogram(
+            f, x="cat3_slug", title="cat3_slug",
+            category_orders={"cat3_slug": f["cat3_slug"].value_counts().index}),
         use_container_width=True)
 
 # ==================================================================
@@ -88,15 +93,38 @@ with tabs[2]:
         use_container_width=True)
 
 # ==================================================================
-# Q4 — price_value by cat3_slug
+# Q4 — price_value by cat3_slug (boxplot, log x-scale)
 # ==================================================================
 with tabs[3]:
     st.markdown("**Q4. توزیع قیمت فروش (price_value) را برای دسته‌بندی‌های سطح سه رسم کنید.**")
-    sell_prices = f[f["price_value"].notna()]
-    st.plotly_chart(
-        px.histogram(sell_prices, x="price_value", color="cat3_slug",
-                     nbins=40, title="price_value"),
-        use_container_width=True)
+
+    df_plot = f[f["price_value"] > 0]
+
+    if len(df_plot) == 0:
+        st.warning("No sale ads with price_value > 0 match the current filters.")
+    else:
+        order = (
+            df_plot.groupby("cat3_slug")["price_value"]
+            .median()
+            .sort_values()
+            .index
+        )
+
+        fig, ax = plt.subplots(figsize=(14, 8))
+        sns.boxplot(
+            data=df_plot,
+            x="price_value",
+            y="cat3_slug",
+            order=order,
+            ax=ax,
+        )
+        ax.set_xscale("log")
+        ax.set_xlabel("Sale Price (Log Scale)")
+        ax.set_ylabel("Level 3 Category")
+        ax.set_title("Distribution of Sale Price by Level 3 Category")
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close(fig)
 
 # ==================================================================
 # Q5 — geographic heatmap
@@ -117,17 +145,23 @@ with tabs[4]:
             lat='location_latitude',
             lon='location_longitude',
             radius=5,
-            zoom=5,
+            zoom=9,
             map_style='open-street-map',
             title='Ad density',
+            color_continuous_scale=[
+                [0.0, "#fff5b1"],   # very low density → light yellow
+                [0.25, "#fdc35f"],
+                [0.5, "#f57f2e"],
+                [0.75, "#d63a1a"],
+                [1.0, "#7a0a0a"],   # high density → dark red
+            ],
         )
         st.plotly_chart(fig, use_container_width=True)
     except AttributeError:
-        # Fallback: Streamlit's built-in map (always works, no plotly needed)
         st.map(map_data.rename(columns={
             'location_latitude': 'lat',
             'location_longitude': 'lon',
-        })[['lat', 'lon']], zoom=5)
+        })[['lat', 'lon']], zoom=9)
 
     st.markdown("**Top 5 neighborhoods by ad count:**")
     st.write(f["neighborhood_slug"].value_counts().head(5))
@@ -250,7 +284,7 @@ with tabs[6]:
         plt.close(fig)
 
 # ==================================================================
-# Q8 — correlation heatmap
+# Q8 — Spearman correlation heatmap (pink → white → green)
 # ==================================================================
 with tabs[7]:
     st.markdown("""
@@ -262,54 +296,66 @@ with tabs[7]:
                "regular_person_capacity", "rooms_count",
                "location_latitude", "location_longitude"]
 
-    # keep only columns that actually exist in the parquet
+    # defensive: skip any column not in parquet
     columns = [c for c in columns if c in f.columns]
-    d8 = f[columns].apply(pd.to_numeric, errors="coerce")
-    correlation_matrix = d8.corr(method="pearson")
 
-    persian_labels = {
-        "price_value": "مبلغ قیمت",
-        "land_size": "متراژ زمین",
-        "building_size": "زیربنا",
-        "regular_person_capacity": "ظرفیت نفرات",
-        "rooms_count": "تعداد اتاق‌ها",
-        "location_latitude": "عرض جغرافیایی",
-        "location_longitude": "طول جغرافیایی",
-    }
-    labels = [fix_fa(persian_labels[c]) for c in columns]
-    annot_matrix = correlation_matrix.map(
-        lambda x: "N/A" if pd.isna(x) else f"{x:.2f}"
-    )
+    if len(columns) < 2:
+        st.info("Not enough columns available for the correlation matrix.")
+    else:
+        d8 = f[columns].copy()
+        for col in columns:
+            d8[col] = pd.to_numeric(d8[col], errors="coerce")
 
-    cmap = plt.cm.coolwarm.copy()
-    cmap.set_bad("#BDBDBDC7")
+        # Spearman correlation (per Q8_Final_new.py)
+        corr = d8[columns].corr(method="spearman")
 
-    fig, ax = plt.subplots(figsize=(12, 10))
-    fig.subplots_adjust(top=0.92, bottom=0.22, left=0.22, right=0.90)
-    sns.heatmap(
-        correlation_matrix,
-        annot=annot_matrix, fmt="",
-        cmap=cmap, vmin=-1, vmax=1, center=0, square=True,
-        linewidths=1.5, linecolor="white",
-        xticklabels=labels, yticklabels=labels,
-        annot_kws={"fontsize": 11, "fontweight": "bold", "color": "black"},
-        cbar_kws={"shrink": 0.80}, ax=ax,
-    )
-    ax.set_xticklabels(labels, rotation=45, ha="right", rotation_mode="anchor", fontsize=11)
-    ax.set_yticklabels(labels, rotation=0, fontsize=11)
-    ax.tick_params(axis="x", pad=10)
-    ax.tick_params(axis="y", pad=10)
-    ax.set_title(fix_fa("ماتریس همبستگی متغیرها"),
-                 fontsize=16, fontweight="bold", pad=18)
-    cbar = ax.collections[0].colorbar
-    cbar.set_label(fix_fa("ضریب همبستگی"),
-                   fontsize=11, rotation=270, labelpad=18)
-    plt.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
+        persian_labels = {
+            "price_value": "مبلغ قیمت",
+            "land_size": "متراژ زمین",
+            "building_size": "زیربنا",
+            "regular_person_capacity": "ظرفیت نفرات",
+            "rooms_count": "تعداد اتاق‌ها",
+            "location_latitude": "عرض جغرافیایی",
+            "location_longitude": "طول جغرافیایی",
+        }
+        labels = [fix_fa(persian_labels[c]) for c in columns]
+
+        annot = corr.map(lambda x: "N/A" if pd.isna(x) else f"{x:.2f}")
+
+        # pink → white → green colormap (per Q8_Final_new.py)
+        cmap = mcolors.LinearSegmentedColormap.from_list(
+            "pink_green", ["#FF69B4", "#FFFFFF", "#2E8B57"])
+        cmap.set_bad("#BDBDBDC7")
+
+        fig, ax = plt.subplots(figsize=(14, 12))
+        fig.subplots_adjust(top=0.90, bottom=0.20, left=0.20, right=0.88)
+
+        sns.heatmap(
+            corr, annot=annot, fmt="", cmap=cmap,
+            vmin=-1, vmax=1, center=0, square=True,
+            linewidths=1.5, linecolor="white",
+            xticklabels=labels, yticklabels=labels,
+            annot_kws={"fontsize": 12, "fontweight": "bold", "color": "black"},
+            cbar_kws={"shrink": 0.80}, ax=ax,
+        )
+
+        ax.set_xticklabels(labels, rotation=45, ha="right",
+                           rotation_mode="anchor", fontsize=12)
+        ax.set_yticklabels(labels, rotation=0, fontsize=12)
+        ax.tick_params(axis="x", pad=10)
+        ax.tick_params(axis="y", pad=10)
+        ax.set_title(fix_fa("ماتریس همبستگی متغیرها"),
+                     fontsize=18, fontweight="bold", pad=20)
+
+        cbar = ax.collections[0].colorbar
+        cbar.set_label(fix_fa("ضریب همبستگی"),
+                       fontsize=12, rotation=270, labelpad=20)
+
+        st.pyplot(fig)
+        plt.close(fig)
 
 # ==================================================================
-# Q9 — amenities by Tehran neighborhood
+# Q9 — top 30 cities by % of homes with each amenity
 # ==================================================================
 with tabs[8]:
     st.markdown("""
@@ -318,106 +364,75 @@ with tabs[8]:
     این موضوع را نشان دهید.**
     """)
 
-    city_clean = f["city_slug"].astype(str).str.strip().str.lower()
-    df_tehran = f[
-        city_clean.str.contains("tehran", na=False) | city_clean.eq("تهران")
-    ].copy()
-
-    neighborhood_fa = {
-        "saadat_abad": "سعادت‌آباد", "saadatabad": "سعادت‌آباد",
-        "janat_abad": "جنت‌آباد", "janatabad": "جنت‌آباد",
-        "elahiyeh": "الهیه", "elahieh": "الهیه",
-        "simon_bolivar": "سیمون بولیوار", "simon-bolivar": "سیمون بولیوار",
-        "shahrak_gharb": "شهرک غرب", "shahrak-gharb": "شهرک غرب",
-        "punak": "پونک", "punak_shomali": "پونک شمالی", "punak_jonoobi": "پونک جنوبی",
-        "farahzad": "فرحزاد", "marzdaran": "مرزداران", "bagh_feyz": "باغ فیض",
-        "shahran": "شهران", "ferdows": "فردوس", "ekbatan": "اکباتان",
-        "ariya_shahr": "آریاشهر", "yousef_abad": "یوسف‌آباد", "yusef_abad": "یوسف‌آباد",
-        "mirdamad": "میرداماد", "vanak": "ونک", "qolhak": "قلهک", "gholhak": "قلهک",
-        "farmanieh": "فرمانیه", "kamranieh": "کامرانیه", "kamraniyeh": "کامرانیه",
-        "zafaraniyeh": "زعفرانیه", "zaferaniyeh": "زعفرانیه", "niavaran": "نیاوران",
-        "tajrish": "تجریش", "velenjak": "ولنجک", "darakeh": "درکه",
-        "qeytarieh": "قیطریه", "qeytarie": "قیطریه", "pasdaran": "پاسداران",
-        "tehranpars": "تهرانپارس", "narmak": "نارمک", "lavisan": "لویزان",
-        "hakimiyeh": "حکیمیه", "shamsabad": "شمس‌آباد", "sadeghieh": "صادقیه",
-        "sadeghiyeh": "صادقیه", "gisha": "گیشا", "kuy_nasr": "کوی نصر",
-        "moniriyeh": "منیریه", "jomhouri": "جمهوری", "yaftabad": "یافت‌آباد",
-        "chitgar": "چیتگر", "shahrak_azadi": "شهرک آزادی", "shahrak_baqeri": "شهرک باقری",
-        "aghdasiyeh": "اقدسیه", "mahmodiyeh": "محمودیه", "mahmoodieh": "محمودیه",
-        "fereshteh": "فرشته", "jordaan": "جردن", "jordan": "جردن",
-        "darrous": "دروس", "darus": "دروس", "ekhtiyariyeh": "اختیاریه",
-        "niayesh": "نیایش", "zargandeh": "زرگنده", "abbas_abad": "عباس‌آباد",
-        "seyed_khandan": "سیدخندان", "motahari": "مطهری", "fatemi": "فاطمی",
-        "amiriyeh": "امیریه", "nazem_abad": "نظام‌آباد", "nizam_abad": "نظام‌آباد",
-        "tehran_no": "تهران‌نو", "tehran_nou": "تهران‌نو", "tehran_pars": "تهرانپارس",
-        "nazi_abad": "نازی‌آباد", "joobsh": "جوب‌شیر",
+    # source file uses bare column names; parquet may store *_combined variants
+    features_info = {
+        'has_balcony':        {'name': 'بالکن',    'color': '#00A896',
+                               'fallbacks': ['has_balcony_combined']},
+        'has_elevator':       {'name': 'آسانسور',  'color': '#DDA15E',
+                               'fallbacks': []},
+        'has_security_guard': {'name': 'نگهبان',   'color': '#9b59b6',
+                               'fallbacks': ['has_security_guard_combined']},
+        'has_barbecue':       {'name': 'باربیکیو', 'color': '#f39c12',
+                               'fallbacks': ['has_barbecue_combined']},
+        'has_pool':           {'name': 'استخر',    'color': '#3498db',
+                               'fallbacks': ['has_pool_combined']},
     }
 
-    df_tehran["neighborhood_clean"] = (
-        df_tehran["neighborhood_slug"].astype(str).str.strip().str.lower()
-        .str.replace("-", "_", regex=False)
-    )
-    df_tehran["neighborhood_fa"] = df_tehran["neighborhood_clean"].map(neighborhood_fa)
+    for col, info in features_info.items():
+        # resolve the actual column name
+        actual_col = None
+        if col in f.columns:
+            actual_col = col
+        else:
+            for fb in info['fallbacks']:
+                if fb in f.columns:
+                    actual_col = fb
+                    break
 
-    features = {
-        "has_balcony": {"title": "درصد خانه‌های دارای بالکن در محله‌های تهران", "color": "#93C078"},
-        "has_elevator": {"title": "درصد خانه‌های دارای آسانسور در محله‌های تهران", "color": "#EC6DA2"},
-        "has_security_guard_combined": {"title": "درصد خانه‌های دارای نگهبانی/سرایداری در محله‌های تهران", "color": "#B5A5DA"},
-        "has_barbecue_combined": {"title": "درصد خانه‌های دارای باربیکیو در محله‌های تهران", "color": "#E8BC5A"},
-        "has_pool_combined": {"title": "درصد خانه‌های دارای استخر در محله‌های تهران", "color": "#7CDBBE"},
-    }
-
-    def convert_feature(series):
-        true_values = {True, 1, "1", "1.0", "true", "True", "TRUE", "yes", "Yes", "YES", "دارد", "دارد "}
-        false_values = {False, 0, "0", "0.0", "false", "False", "FALSE", "no", "No", "NO", "ندارد", "ندارد "}
-        result = pd.Series([None] * len(series), index=series.index, dtype="object")
-        result[series.isin(true_values)] = True
-        result[series.isin(false_values)] = False
-        return result
-
-    rendered_any = False
-    for feature, info in features.items():
-        if feature not in df_tehran.columns:
-            st.info(f"Column `{feature}` not found in data — skipping.")
+        if actual_col is None:
+            st.info(f"Column `{col}` not found in data — skipping.")
             continue
 
-        temp = df_tehran[["neighborhood_fa", feature]].copy()
-        temp[feature] = convert_feature(temp[feature])
-        temp = temp.dropna(subset=["neighborhood_fa"])
-        temp_known = temp.dropna(subset=[feature])
+        df_temp = f[['city_slug', actual_col]].dropna()
 
-        if len(temp_known) == 0:
-            st.info(f"No data for `{feature}` — skipping.")
+        if len(df_temp) == 0:
+            st.info(f"No data for `{actual_col}` — skipping.")
             continue
 
-        # cast to numeric so sum works reliably
-        temp_known[feature] = temp_known[feature].astype(int)
+        city_stats = df_temp.groupby('city_slug')[actual_col].agg(
+            total='count',
+            has_feat=lambda x: (x == True).sum())
 
-        result = (
-            temp_known.groupby("neighborhood_fa")[feature]
-            .agg(total_known="count", has_feature="sum")
-            .reset_index()
-        )
-        result["percentage"] = result["has_feature"] / result["total_known"] * 100
-        result = result.sort_values("percentage", ascending=True)
+        # cities with at least 50 ads
+        city_stats = city_stats[city_stats['total'] >= 50]
 
-        fig, ax = plt.subplots(figsize=(12, max(6, 0.35 * len(result))))
-        ax.barh(result["neighborhood_fa"].apply(fix_fa),
-                result["percentage"], color=info["color"])
-        ax.set_title(fix_fa(info["title"]), fontsize=16, fontweight="bold", pad=12)
-        ax.set_xlabel(fix_fa("درصد خانه‌ها (%)"), fontsize=12)
-        ax.set_ylabel(fix_fa("محله"), fontsize=12)
-        max_val = result["percentage"].max()
-        ax.set_xlim(0, max(max_val * 1.15, 10))
-        ax.grid(axis="x", alpha=0.25)
-        for bar, value in zip(ax.patches, result["percentage"]):
-            ax.text(value + max_val * 0.01,
+        if len(city_stats) == 0:
+            st.info(f"No cities with ≥50 ads for `{actual_col}` — skipping.")
+            continue
+
+        city_stats['percent'] = (city_stats['has_feat'] / city_stats['total']) * 100
+
+        top_30 = city_stats.sort_values(by='percent', ascending=False).head(30)
+
+        fig, ax = plt.subplots(figsize=(10, 10))
+        cities_fa = [fix_fa(c) for c in top_30.index]
+
+        bars = ax.barh(cities_fa[::-1],
+                       top_30['percent'].values[::-1],
+                       color=info['color'])
+
+        ax.set_title(fix_fa(f'۳۰ شهر برتر از نظر درصد خانه‌های دارای {info["name"]}'))
+        ax.set_xlabel(fix_fa('درصد خانه‌ها (%)'))
+        ax.set_ylabel(fix_fa('شهر'))
+        ax.set_xlim(0, max(top_30['percent']) * 1.15)
+        ax.grid(axis='x', alpha=0.3)
+
+        for bar in bars:
+            val = bar.get_width()
+            ax.text(val + 0.3,
                     bar.get_y() + bar.get_height() / 2,
-                    f"{value:.1f}%", va="center", fontsize=9)
+                    f'{val:.1f}%', va='center', fontsize=8)
+
         plt.tight_layout()
         st.pyplot(fig)
         plt.close(fig)
-        rendered_any = True
-
-    if not rendered_any:
-        st.warning("No amenity charts could be rendered for the current filters.")
